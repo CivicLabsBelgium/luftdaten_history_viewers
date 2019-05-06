@@ -1,7 +1,8 @@
 {
   "name": "luftdaten_history_viewers",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "homepage": ".",
   "dependencies": {
     "@appsaloon/logger-js": "^1.0.3",
     "date-fns": "^2.0.0-alpha.27",
