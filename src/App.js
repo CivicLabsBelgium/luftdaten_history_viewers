@@ -7,7 +7,7 @@ import Point from 'ol/geom/Point'
 import {fromLonLat, transformExtent} from 'ol/proj'
 import {Fill, Style} from 'ol/style'
 import {Vector as VectorLayer} from 'ol/layer.js';
-import {Vector as VectorSource, Cluster} from 'ol/source.js'
+import {Vector as VectorSource} from 'ol/source.js'
 import Hexbin from 'ol-ext/source/HexBin'
 import { format, startOfDay, addDays, eachDayOfInterval, addHours } from 'date-fns'
 import DatePicker from 'react-datepicker'

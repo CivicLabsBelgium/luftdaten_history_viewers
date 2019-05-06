@@ -4,7 +4,7 @@ COPY package*.json ./
 RUN npm i
 COPY public ./public
 COPY src ./src
-RUN npm run build
+RUN REACT_APP_LOG_ENV=production npm run build
 
 FROM node:dubnium-alpine AS release
 RUN apk add --no-cache tini
