@@ -3,6 +3,14 @@ import ReactDOM from 'react-dom';
 import './index.css';
 import App from './App';
 import * as serviceWorker from './serviceWorker';
+import initLogstash from '@appsaloon/logger-js'
+
+const logstashOptions = {
+  protocol: 'https',
+  hostname: 'elk.appsaloon.be',
+  path: 'app-frontend',
+}
+initLogstash(logstashOptions)
 
 ReactDOM.render(<App />, document.getElementById('root'));
 
