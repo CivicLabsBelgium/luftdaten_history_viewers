@@ -1,18 +1,19 @@
 import React from 'react'
 import {Map, View} from 'ol'
 import TileLayer from 'ol/layer/Tile'
-import Feature from 'ol/Feature.js'
 import XYZ from 'ol/source/XYZ'
-import Point from 'ol/geom/Point'
 import {fromLonLat, transformExtent} from 'ol/proj'
 import {Fill, Style} from 'ol/style'
-import {Vector as VectorLayer} from 'ol/layer.js';
-import {Vector as VectorSource} from 'ol/source.js'
+import {Vector as VectorLayer} from 'ol/layer.js'
+import {Vector as VectorSource} from 'ol/source'
 import Hexbin from 'ol-ext/source/HexBin'
 import { format, startOfDay, addDays, eachDayOfInterval, addHours } from 'date-fns'
 import DatePicker from 'react-datepicker'
 import PlayerBar from './PlayerBar'
 import SunCalc from 'suncalc'
+import WebWorker from './WebWorker'
+import dataParseWorker from './worker'
+import GeoJSON from 'ol/format/GeoJSON'
 
 import "react-datepicker/dist/react-datepicker.css"
 import "./App.css"
@@ -21,15 +22,39 @@ import "./App.css"
 let map
 
 const colours =  [
-  {color: '#70AE6E', value: 0},
-  {color: '#70AE6E', value: 20},
-  {color: '#E5C038', value: 35},
-  {color: '#ea8b00', value: 50},
-  {color: '#d8572a', value: 100},
-  {color: '#c32f27', value: 1200}
+  {color: '#70AE6E', value: 0, style: new Style({
+    fill: new Fill({
+      color: '#70AE6E'
+    })
+  })},
+  {color: '#70AE6E', value: 20, style: new Style({
+    fill: new Fill({
+      color: '#70AE6E'
+    })
+  })},
+  {color: '#E5C038', value: 35, style: new Style({
+    fill: new Fill({
+      color: '#E5C038'
+    })
+  })},
+  {color: '#ea8b00', value: 50, style: new Style({
+    fill: new Fill({
+      color: '#ea8b00'
+    })
+  })},
+  {color: '#d8572a', value: 100, style: new Style({
+    fill: new Fill({
+      color: '#d8572a'
+    })
+  })},
+  {color: '#c32f27', value: 1200, style: new Style({
+    fill: new Fill({
+      color: '#c32f27'
+    })
+  })}
 ]
 
-const valueExceedsIndex = (meanValue) => {
+const getStyleForMean = (meanValue) => {
   return colours.find((data) => data.value >= meanValue) || colours[colours.length - 1]
 }
 
@@ -42,7 +67,7 @@ class App extends React.Component {
       map: {},
       phenomenom: 'PM25',
       phenomena: ['PM25', 'PM10'],
-      layers: new Map(),
+      layers: {},
       interval: 1000 * 60 * 30,
       start: Date.parse(startOfDay(new Date('2019-04-04'))),
       time: Date.parse(startOfDay(new Date('2019-04-04'))),
@@ -140,7 +165,7 @@ class App extends React.Component {
     this.setState({
       data: data
     })
-    this.prepareLayers()
+    this.parseData()
     
   }
   mergeDataDays (oldData, newData) {
@@ -174,7 +199,9 @@ class App extends React.Component {
     })
     map.setView(new View({
       center: fromLonLat([pos[1], pos[0]]),
-      zoom: 10
+      maxResolution: 5000,
+      minResolution: 4.5,
+      resolution: 160
     }))
     this.setState({map})
     map.on('moveend', () => {
@@ -191,85 +218,131 @@ class App extends React.Component {
         }
       }
       const zoomlevel = map.getView().getZoom()
-      console.log('Tiles: ',luftdatenTiles, 'Zoom: ', zoomlevel)
+      const resolution = map.getView().getResolutionForZoom(zoomlevel)
+      console.log('Tiles: ',luftdatenTiles, 'Zoom: ', zoomlevel, 'resolution: ', resolution)
+      const shouldRerenderHexBinning = (this.state.resolution !== resolution)
       this.setState({
         luftdatenTiles,
         mapBox: box,
         zoomlevel,
-        position: [box[1] + ((box[3] - box[1]) / 2), box[0] + ((box[2] - box[0]) / 2)]
+        resolution,
+        position: [box[1] + ((box[3] - box[1]) / 2), box[0] + ((box[2] - box[0]) / 2)],
+        hexbinSize: this.resolutionToHexbinSize(resolution)
       })
+      if (shouldRerenderHexBinning) {
+        console.log('prepareLayers')
+        this.prepareLayers()
+      }
+      
     })
   }
-  async prepareLayers () {
+  resolutionToHexbinSize (resolution) {
+    const minSize = [4.5, 40]
+    const maxSize = [300, 7000]
+    return (((maxSize[1] - minSize[1]) / (maxSize[0] - minSize[0])) * (resolution - minSize[0])) + minSize[1]
+  }
+  parseData () {
     const state = this.state
     let sensors = state.data
     if (!sensors || sensors.length === 0) return
+
+    sensors = sensors.map(sensor => {
+      sensor.coordinates = fromLonLat([sensor.location.longitude, sensor.location.latitude])
+      return sensor
+    })
     
-    const layers = new Map()
     const duration = state.end - state.start
     const amountOfLayers = duration / state.interval
     let time = state.start
     let tillTime = state.start + state.interval
 
+    this.worker.postMessage({
+      sensors,
+      amountOfLayers,
+      time,
+      tillTime,
+      start: state.start,
+      interval: state.interval
+    })
+
     this.setState({
       parsing: true
     })
 
-    const vectorSource = []
-    for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
-      vectorSource[timeMultiplier] = new VectorSource()
-    }
+    // const vectorSource = []
+    // for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
+    //   vectorSource[timeMultiplier] = new VectorSource()
+    // }
     
-    console.log('optimize timeSeries')
-    sensors = sensors.map(sensor => {
-      sensor.timeserie.map(timelog => {
-        timelog[0] = Date.parse(timelog[0])
-        return timelog
-      })
-      return sensor
-    })
+    // console.log('optimize timeSeries')
+    // sensors = sensors.map(sensor => {
+    //   sensor.timeserie.map(timelog => {
+    //     timelog[0] = Date.parse(timelog[0])
+    //     return timelog
+    //   })
+    //   return sensor
+    // })
 
-    console.log('parsing')
-    for (let index = 0; index < sensors.length; index++) {
-      const sensor = sensors[index]
-      const timeSerie = sensor.timeserie
-      console.log('sensor: ', index + 1)
-      for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
-        time = state.start + (timeMultiplier * state.interval)
-        tillTime = time + state.interval
-        const data = []
-        while(timeSerie[0] && timeSerie[0][0] < tillTime) {
-          if (timeSerie[0][0] > time) data.push(timeSerie.shift())
-          timeSerie.shift()
-        }
-        const value = (data.reduce((acc, t) => {
-          acc = acc + t[1]
-          return acc
-        }, 0))/data.length
+    // console.log('parsing')
+    // for (let index = 0; index < sensors.length; index++) {
+    //   const sensor = sensors[index]
+    //   const timeSerie = sensor.timeserie
+      
+    //   for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
+    //     time = state.start + (timeMultiplier * state.interval)
+    //     tillTime = time + state.interval
+    //     const data = []
+    //     while(timeSerie[0] && timeSerie[0][0] < tillTime) {
+    //       if (timeSerie[0][0] > time) data.push(timeSerie.shift())
+    //       timeSerie.shift()
+    //     }
+    //     const value = (data.reduce((acc, t) => {
+    //       acc = acc + t[1]
+    //       return acc
+    //     }, 0))/data.length
 
-        if (!isNaN(value)) {
-          const feature = new Feature({
-            geometry: new Point(fromLonLat([sensor.location.longitude, sensor.location.latitude])),
-            name: sensor.id,
-            value
-          })
-          vectorSource[timeMultiplier].addFeature(feature)
-        }
-      } 
-    }
-    
-    const hexbinSize = (((9000 - 40) / (6 - 15)) * (state.zoomlevel - 15)) + 40
-    console.log('hexbinSize: ', hexbinSize, 'zoomlevel: ', state.zoomlevel)
+    //     if (!isNaN(value)) {
+    //       const feature = new Feature({
+    //         geometry: new Point(fromLonLat([sensor.location.longitude, sensor.location.latitude])),
+    //         name: sensor.id,
+    //         value
+    //       })
+    //       vectorSource[timeMultiplier].addFeature(feature)
+    //     }
+    //   } 
+    // }
+    // this.setState({
+    //   vectorSource,
+    //   parsing: false,
+    //   data: []
+    // })
+    // console.log('Data parsing done')
+    // this.prepareLayers()
+  }
+  prepareLayers () {
+    console.log('preparing layers')
+    const state = this.state
+    const geoJsonObject = state.geoJsonObject
+    if (!geoJsonObject || (geoJsonObject && geoJsonObject.length === 0)) return
+
+    const duration = state.end - state.start
+    const amountOfLayers = duration / state.interval
+    let time = state.start
+
+    const layers = {}
 
     for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
       time = state.start + (timeMultiplier * state.interval)
-      const clusterSource = new Hexbin({
-        source: vectorSource[timeMultiplier],
-        size: hexbinSize
-      });
+      const vectorSource = new VectorSource({
+        features: (new GeoJSON()).readFeatures(geoJsonObject[timeMultiplier])
+      })
+      const hexbin = new Hexbin({
+        source: vectorSource,
+        size: state.hexbinSize
+      })
 
       const vectorLayer = new VectorLayer({
-        source: clusterSource,
+        source: hexbin,
         name: 'timeSerie',
         opacity: 0.7,
         style: feature => {
@@ -286,20 +359,15 @@ class App extends React.Component {
             mean.sort()
             value = mean[parseInt(mean.length / 2)]
           }
-          return new Style({
-            fill: new Fill({
-              color: valueExceedsIndex(value).color
-            })
-          })
+          return getStyleForMean(value).style
         }
       })
-      
-      layers.set(time, vectorLayer)
+      layers[time] = vectorLayer
     }
 
     this.setState({
-      parsing: false,
-      layers
+      layers,
+      parsing: false
     })
     console.log('parsing done')
     this.playData()
@@ -316,7 +384,7 @@ class App extends React.Component {
     mapLayers.forEach(layer => {
       if (layer.get('name') === 'timeSerie') map.removeLayer(layer)
     })
-    const showLayer = layers.get(state.time)
+    const showLayer = layers[state.time]
     if (!showLayer) return
     map.addLayer(showLayer)
     const nextTime = (state.time + state.interval < state.end) ? state.time + state.interval : state.start
@@ -332,11 +400,27 @@ class App extends React.Component {
   }
   componentDidMount() {
     this.setMap()
+    this.worker =  new WebWorker(dataParseWorker)
+    this.worker.addEventListener('message', event => {
+      if (event.data.geoJsonObject) {
+        this.setState({
+          data: [],
+          geoJsonObject: event.data.geoJsonObject
+        })
+        this.prepareLayers()
+      }
+      if (event.data.parsingProgress) {
+        this.setState({
+          parsingProgress: event.data.parsingProgress
+        })
+      }
+    })
   }
   render () {
     const state = this.state
     const duration = state.end - state.start
     const width = ((state.time - state.start) / duration) * 100
+    const progress = state.parsingProgress * 100
     return (
       <div style={{
         width: 800,
@@ -349,9 +433,7 @@ class App extends React.Component {
           margin: 0,
           padding: '8px 16px',
         }}>Historic luftdaten viewer</h3>
-        <div className="form" style={{
-          
-        }}>
+        <div className="form">
           <label>
             Start date: <DatePicker
             selected={state.start}
@@ -381,12 +463,31 @@ class App extends React.Component {
           </label>
           <button onClick={(e) => this.getData()}>Get data</button>
         </div>
+        {state.parsing && progress ? 
+          <div style={{
+            position: 'absolute',
+            bottom: 500,
+            left: 4,
+            width: 800,
+            height: 8
+          }}
+          >
+            <div style={{
+              width: progress + '%',
+              backgroundColor: 'red',
+              height: 8,
+              float: 'left',
+            }}></div>
+          </div>
+        : 
+          null
+        }
         <div id='map' style={{
           width: 792,
           height: 500,
           border: '4px solid #2b2b2b'
         }}>
-        </div> 
+        </div>
         <PlayerBar position={width} onChange={newPos => this.setTime(newPos)}/>
         <div style={{
           textAlign: 'center',
