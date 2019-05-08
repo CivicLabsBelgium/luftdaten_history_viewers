@@ -5,14 +5,11 @@ export default () => {
 
         const {amountOfLayers, interval, start} = e.data
         let {sensors, time, tillTime} = e.data
-        const geoJsonObject = []
-        for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
-            geoJsonObject[timeMultiplier] = {
-                type: 'FeatureCollection',
-                features: []
-            }
+        const geoJsonObject = {
+            type: 'FeatureCollection',
+            features: []
         }
-    
+
         console.log('optimize timeSeries')
         sensors = sensors.map(sensor => {
         sensor.timeserie.map(timelog => {
@@ -27,6 +24,17 @@ export default () => {
             const sensor = sensors[index]
             const timeSerie = sensor.timeserie
             const parsingProgress = index / sensors.length
+            const feature = {
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: sensor.coordinates
+                },
+                properties: {
+                    values: {},
+                    id: sensor.id
+                }
+            }
             if (index % 10 === 0) postMessage({parsingProgress})
             for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
                 time = start + (timeMultiplier * interval)
@@ -42,20 +50,11 @@ export default () => {
                 }, 0))/data.length
 
                 if (!isNaN(value)) {
-                const feature = {
-                    type: 'Feature',
-                    geometry: {
-                        type: 'Point',
-                        coordinates: sensor.coordinates
-                    },
-                    properties: {
-                        value,
-                        id: sensor.id
-                    }
+                feature.properties.values[time] = value
+                
                 }
-                geoJsonObject[timeMultiplier].features.push(feature)
-                }
-            } 
+            }
+            geoJsonObject.features.push(feature) 
         }
 
         postMessage({geoJsonObject});

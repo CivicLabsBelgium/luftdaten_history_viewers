@@ -117,10 +117,11 @@ class App extends React.Component {
         return response.json()
       })
       .then(myJson => {
+        const availableDays = myJson.map(day => Date.parse(day))
         this.setState({
-          availableDays: myJson.map(day => Date.parse(day))
+          availableDays
         })
-        this.prepareLayers()
+        this.setStartDate(availableDays[availableDays.length - 1])
       })
   }
   setPosition(position) {
@@ -130,30 +131,44 @@ class App extends React.Component {
   }
   getDataForDate (date) {
     const phenomenom = this.state.phenomenom
-    return new Promise((resolve, reject) => {
-      const promises = this.state.luftdatenTiles.map(position => fetch(`https://history.influencair.be/${phenomenom}/${position}/${date}/data.json`).then(response => {
-        if (response.status === 200) {
-          return response.json()
-        } else {
-          return []
-        }
-      }))
-      Promise.all(promises).then(results => {
-        resolve(results.flat())
-      })
+    let luftdatenTiles = this.state.luftdatenTiles
+    return new Promise(async (resolve, reject) => {
+      const response = await fetch(`https://history.influencair.be/availableLocations/${date}`)
+      const availableTiles = await response.json()
+      
+      luftdatenTiles = luftdatenTiles.filter(tile => availableTiles.includes(tile))
+
+      console.log('Do max 10 concurrent call per time')
+      
+      luftdatenTiles = luftdatenTiles.reduce((acc, tile, index) => {
+        (acc[Math.floor(index / 10)] = acc[Math.floor(index / 10)] || []).push(tile)
+        return acc
+      },[])
+      const result = []
+      for (const tileGroup of luftdatenTiles) {
+        const promises = tileGroup.map(position => fetch(`https://history.influencair.be/${phenomenom}/${position}/${date}/data.json`).then(response => {
+          if (response.status === 200) {
+            return response.json()
+          } else {
+            return []
+          }
+        }))
+        const results = await Promise.all(promises)
+        result.push(results.flat())
+      }
+      resolve(result.flat())
     })
   }
   async getData (){
     this.setState({
       stopPlayer: true,
       data: [],
-      layers: new Map()
+      parsing: true
     })
     let data =  []
     const dates = this.state.dates
     
-    for (let index = 0; index < dates.length; index++) {
-      const date = dates[index];
+    for (const date of dates) {
       const newData = await this.getDataForDate(date)
       if (data.length === 0) {
         data = newData
@@ -186,6 +201,7 @@ class App extends React.Component {
     const pos = this.state.position
     map = new Map({
       target: 'map',
+      renderer: 'webgl',
       layers: [
         new TileLayer({
           source: new XYZ({
@@ -219,7 +235,7 @@ class App extends React.Component {
       }
       const zoomlevel = map.getView().getZoom()
       const resolution = map.getView().getResolutionForZoom(zoomlevel)
-      console.log('Tiles: ',luftdatenTiles, 'Zoom: ', zoomlevel, 'resolution: ', resolution)
+      console.log('resolution: ', resolution, 'hexbinSize: ', this.resolutionToHexbinSize(resolution))
       const shouldRerenderHexBinning = (this.state.resolution !== resolution)
       this.setState({
         luftdatenTiles,
@@ -238,7 +254,7 @@ class App extends React.Component {
   }
   resolutionToHexbinSize (resolution) {
     const minSize = [4.5, 40]
-    const maxSize = [300, 7000]
+    const maxSize = [300, 6500]
     return (((maxSize[1] - minSize[1]) / (maxSize[0] - minSize[0])) * (resolution - minSize[0])) + minSize[1]
   }
   parseData () {
@@ -268,87 +284,81 @@ class App extends React.Component {
     this.setState({
       parsing: true
     })
-
-    // const vectorSource = []
-    // for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
-    //   vectorSource[timeMultiplier] = new VectorSource()
-    // }
-    
-    // console.log('optimize timeSeries')
-    // sensors = sensors.map(sensor => {
-    //   sensor.timeserie.map(timelog => {
-    //     timelog[0] = Date.parse(timelog[0])
-    //     return timelog
-    //   })
-    //   return sensor
-    // })
-
-    // console.log('parsing')
-    // for (let index = 0; index < sensors.length; index++) {
-    //   const sensor = sensors[index]
-    //   const timeSerie = sensor.timeserie
-      
-    //   for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
-    //     time = state.start + (timeMultiplier * state.interval)
-    //     tillTime = time + state.interval
-    //     const data = []
-    //     while(timeSerie[0] && timeSerie[0][0] < tillTime) {
-    //       if (timeSerie[0][0] > time) data.push(timeSerie.shift())
-    //       timeSerie.shift()
-    //     }
-    //     const value = (data.reduce((acc, t) => {
-    //       acc = acc + t[1]
-    //       return acc
-    //     }, 0))/data.length
-
-    //     if (!isNaN(value)) {
-    //       const feature = new Feature({
-    //         geometry: new Point(fromLonLat([sensor.location.longitude, sensor.location.latitude])),
-    //         name: sensor.id,
-    //         value
-    //       })
-    //       vectorSource[timeMultiplier].addFeature(feature)
-    //     }
-    //   } 
-    // }
-    // this.setState({
-    //   vectorSource,
-    //   parsing: false,
-    //   data: []
-    // })
-    // console.log('Data parsing done')
-    // this.prepareLayers()
   }
   prepareLayers () {
     console.log('preparing layers')
     const state = this.state
+    const time = state.time
+    const mapLayers = map.getLayers().getArray()
     const geoJsonObject = state.geoJsonObject
     if (!geoJsonObject || (geoJsonObject && geoJsonObject.length === 0)) return
 
-    const duration = state.end - state.start
-    const amountOfLayers = duration / state.interval
-    let time = state.start
+    const vectorSource = new VectorSource({
+      features: (new GeoJSON()).readFeatures(geoJsonObject)
+    })
+    const hexbin = new Hexbin({
+      source: vectorSource,
+      size: state.hexbinSize
+    })
 
-    const layers = {}
+    const vectorLayer = new VectorLayer({
+      source: hexbin,
+      name: 'timeSerie',
+      opacity: 0.7,
+      style: feature => {
+        const features = feature.get('features')
+        const mean = features.map(f => {
+          return f.get('values')[time]
+        })
+        let value
+        if (mean.length === 1) {
+          value = mean[0]
+        } else if (mean.length === 2) {
+          value = (mean[0] + mean[1])/2
+        } else {
+          mean.sort()
+          value = mean[parseInt(mean.length / 2)]
+        }
+        return getStyleForMean(value).style
+      }
+    })
 
-    for (let timeMultiplier = 0; timeMultiplier < amountOfLayers; timeMultiplier++) {
-      time = state.start + (timeMultiplier * state.interval)
-      const vectorSource = new VectorSource({
-        features: (new GeoJSON()).readFeatures(geoJsonObject[timeMultiplier])
-      })
-      const hexbin = new Hexbin({
-        source: vectorSource,
-        size: state.hexbinSize
-      })
-
-      const vectorLayer = new VectorLayer({
-        source: hexbin,
-        name: 'timeSerie',
-        opacity: 0.7,
-        style: feature => {
+    mapLayers.forEach(layer => {
+      if (layer.get('name') === 'timeSerie') map.removeLayer(layer)
+    })
+    state.map.addLayer(vectorLayer)
+    this.playData()
+  }
+  startPlaying() {
+    this.setState({
+      stopPlayer: false
+    })
+    // it only works when I do this crazy setTimeout function
+    setTimeout(() => {
+      this.playData()
+    },100)
+    
+  }
+  stopPlaying() {
+    this.setState({
+      stopPlayer: true
+    })
+  }
+  playData () {
+    const state = this.state
+    const map = state.map
+    const mapLayers = map.getLayers().getArray()
+    const timeZoneOffset = state.position[1] * 24 / 360
+    const sun = SunCalc.getPosition(addHours(state.time, timeZoneOffset), state.position[0], state.position[1]).altitude
+    const tileOpacity = Math.min(Math.max(0.8 + ((sun + 0.2)), 0),1)
+    mapLayers[0].setOpacity(tileOpacity)
+    
+    mapLayers.forEach(layer => {
+      if (layer.get('name') === 'timeSerie') {
+        layer.setStyle(feature => {
           const features = feature.get('features')
           const mean = features.map(f => {
-            return f.get('value')
+            return f.get('values')[state.time]
           })
           let value
           if (mean.length === 1) {
@@ -360,38 +370,14 @@ class App extends React.Component {
             value = mean[parseInt(mean.length / 2)]
           }
           return getStyleForMean(value).style
-        }
-      })
-      layers[time] = vectorLayer
-    }
+        })
+      }
+    })
 
-    this.setState({
-      layers,
-      parsing: false
-    })
-    console.log('parsing done')
-    this.playData()
-  }
-  playData () {
-    const state = this.state
-    const map = state.map
-    const mapLayers = map.getLayers().getArray()
-    const layers = state.layers
-    const timeZoneOffset = state.position[1] * 24 / 360
-    const sun = SunCalc.getPosition(addHours(state.time, timeZoneOffset), state.position[0], state.position[1]).altitude
-    const tileOpacity = Math.min(Math.max(0.8 + ((sun + 0.2)), 0),1)
-    mapLayers[0].setOpacity(tileOpacity)
-    mapLayers.forEach(layer => {
-      if (layer.get('name') === 'timeSerie') map.removeLayer(layer)
-    })
-    const showLayer = layers[state.time]
-    if (!showLayer) return
-    map.addLayer(showLayer)
-    const nextTime = (state.time + state.interval < state.end) ? state.time + state.interval : state.start
     if (!state.stopPlayer) {
       setTimeout(() => {
         this.setState({
-          time: nextTime
+          time: (state.time + state.interval < state.end) ? state.time + state.interval : state.start
         })
         this.playData()
       }, 1000 / state.framesPerSecond)
@@ -433,35 +419,43 @@ class App extends React.Component {
           margin: 0,
           padding: '8px 16px',
         }}>Historic luftdaten viewer</h3>
-        <div className="form">
-          <label>
-            Start date: <DatePicker
-            selected={state.start}
-            onChange={(e) => this.setStartDate(e)}
-            selectsStart
-            includeDates={state.availableDays}
-            dateFormat="yyyy-MM-dd"
-          />
-          </label>
-          <label>
-            End date: <DatePicker
-            selected={state.end}
-            onChange={(e) => this.setEndDate(e)}
-            selectsEnd
-            startDate={state.start}
-            endDate={state.end}
-            includeDates={state.availableDays}
-            maxDate={addDays(state.start, 3)}
-            minDate={state.start}
-            dateFormat="yyyy-MM-dd"
-          />
-          </label>
-          <label>Phenomenom <select defaultValue={this.state.phenomenom} onChange={((e) => {this.setState({phenomenom: e.target.value})})}>
-              <option value='PM25'>PM2.5</option>
-              <option value='PM10'>PM10</option>
-            </select>
-          </label>
-          <button onClick={(e) => this.getData()}>Get data</button>
+        <div className="form row">
+          <div className="column">
+            <label>
+              Start date: <DatePicker
+              selected={state.start}
+              onChange={(e) => this.setStartDate(e)}
+              selectsStart
+              includeDates={state.availableDays}
+              dateFormat="yyyy-MM-dd"
+            />
+            </label>
+            <label>
+              End date: <DatePicker
+              selected={state.end}
+              onChange={(e) => this.setEndDate(e)}
+              selectsEnd
+              startDate={state.start}
+              endDate={state.end}
+              includeDates={state.availableDays}
+              maxDate={addDays(state.start, 3)}
+              minDate={state.start}
+              dateFormat="yyyy-MM-dd"
+            />
+            </label>
+            <label>Phenomenom <select defaultValue={this.state.phenomenom} onChange={((e) => {this.setState({phenomenom: e.target.value})})}>
+                <option value='PM25'>PM2.5</option>
+                <option value='PM10'>PM10</option>
+              </select>
+            </label>
+            <button onClick={() => this.getData()}>Get data</button>
+            {state.stopPlayer ?
+              <button onClick={() => {this.startPlaying()}}>play</button>
+            :
+              <button onClick={() => {this.stopPlaying()}}>pauze</button>
+            }
+          </div>
+          <div className="column"></div>
         </div>
         {state.parsing && progress ? 
           <div style={{
@@ -501,8 +495,8 @@ class App extends React.Component {
             padding: '4px 16px'
             }} >{format(state.time, "yyyy-MM-dd HH:mm:ss")}</span>
         </div>
+        
       </div>
-      
     )
   }
 }
