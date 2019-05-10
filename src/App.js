@@ -54,6 +54,12 @@ const colours =  [
   })}
 ]
 
+const noColoursStyle = new Style({
+  fill: new Fill({
+    color: 'rgba(0, 0, 0, 0)'
+  })
+})
+
 const getStyleForMean = (meanValue) => {
   return colours.find((data) => data.value >= meanValue) || colours[colours.length - 1]
 }
@@ -74,6 +80,8 @@ class App extends React.Component {
       end: Date.parse(startOfDay(new Date('2019-04-04'))) + (1000 * 60 * 60 * 24) - 1,
       framesPerSecond: 5,
       parsingProgress: 0,
+      fetchDateProgress: 0,
+      fetchTilesProgress: 0,
       latlng: [],
       position: [51, 4],
       stopPlayer: true
@@ -133,18 +141,19 @@ class App extends React.Component {
     const phenomenom = this.state.phenomenom
     let luftdatenTiles = this.state.luftdatenTiles
     return new Promise(async (resolve, reject) => {
+      // fetch available locations for this date
       const response = await fetch(`https://history.influencair.be/availableLocations/${date}`)
       const availableTiles = await response.json()
-      
+      // filter out tiles that don't exist
       luftdatenTiles = luftdatenTiles.filter(tile => availableTiles.includes(tile))
-
-      console.log('Do max 10 concurrent call per time')
-      
+      // to prevent to much concurrent calls to the server divide tiles into groups of 5
       luftdatenTiles = luftdatenTiles.reduce((acc, tile, index) => {
-        (acc[Math.floor(index / 10)] = acc[Math.floor(index / 10)] || []).push(tile)
+        (acc[Math.floor(index / 5)] = acc[Math.floor(index / 10)] || []).push(tile)
         return acc
       },[])
+      
       const result = []
+      let fetchCounter = 1
       for (const tileGroup of luftdatenTiles) {
         const promises = tileGroup.map(position => fetch(`https://history.influencair.be/${phenomenom}/${position}/${date}/data.json`).then(response => {
           if (response.status === 200) {
@@ -153,19 +162,27 @@ class App extends React.Component {
             return []
           }
         }))
-        const results = await Promise.all(promises)
-        result.push(results.flat())
+        let results = await Promise.all(promises)
+        for (const response of results) {
+          result.push(...response)
+        }
+        results = []
+        this.setState({
+          fetchTilesProgress: fetchCounter / luftdatenTiles.length
+        })
       }
-      resolve(result.flat())
+      resolve(result)
     })
   }
   async getData (){
     this.setState({
       stopPlayer: true,
       data: [],
-      parsing: true
+      parsing: false,
+      fetching: true,
     })
     let data =  []
+    let fetchCounter = 1
     const dates = this.state.dates
     
     for (const date of dates) {
@@ -175,6 +192,11 @@ class App extends React.Component {
       } else {
         data = this.mergeDataDays(data, newData)
       }
+      this.setState({
+        fetchDateProgress: fetchCounter / dates.length,
+        fetchTilesProgress: 0
+      })
+      fetchCounter++
     }
     console.log('Fetched sensors: ', data.length)
     this.setState({
@@ -261,6 +283,9 @@ class App extends React.Component {
     const state = this.state
     let sensors = state.data
     if (!sensors || sensors.length === 0) return
+    this.setState({
+      parsing: true
+    })
 
     sensors = sensors.map(sensor => {
       sensor.coordinates = fromLonLat([sensor.location.longitude, sensor.location.latitude])
@@ -279,10 +304,6 @@ class App extends React.Component {
       tillTime,
       start: state.start,
       interval: state.interval
-    })
-
-    this.setState({
-      parsing: true
     })
   }
   prepareLayers () {
@@ -357,19 +378,26 @@ class App extends React.Component {
       if (layer.get('name') === 'timeSerie') {
         layer.setStyle(feature => {
           const features = feature.get('features')
-          const mean = features.map(f => {
-            return f.get('values')[state.time]
-          })
+          const mean = features.reduce((acc,f) => {
+            const v = f.get('values')[state.time]
+            if (v) acc.push(v)
+            return acc
+          },[])
+          
           let value
-          if (mean.length === 1) {
-            value = mean[0]
+          if (mean.length === 0) {
+              value = 0
+          } else if (mean.length === 1) {
+            value = mean[0] || 0
           } else if (mean.length === 2) {
             value = (mean[0] + mean[1])/2
-          } else {
+          } else if (mean.length > 2) {
             mean.sort()
             value = mean[parseInt(mean.length / 2)]
+          } else {
+            console.log(mean)
           }
-          return getStyleForMean(value).style
+          return value ? getStyleForMean(value).style : noColoursStyle
         })
       }
     })
@@ -391,7 +419,12 @@ class App extends React.Component {
       if (event.data.geoJsonObject) {
         this.setState({
           data: [],
-          geoJsonObject: event.data.geoJsonObject
+          geoJsonObject: event.data.geoJsonObject,
+          parsing: false,
+          fetching: false,
+          parsingProgress: 0,
+          fetchDateProgress: 0,
+          fetchTilesProgress: 0,
         })
         this.prepareLayers()
       }
@@ -406,7 +439,9 @@ class App extends React.Component {
     const state = this.state
     const duration = state.end - state.start
     const width = ((state.time - state.start) / duration) * 100
-    const progress = state.parsingProgress * 100
+    const parsingProgress = state.parsingProgress * 100
+    const fetchingProgress = (state.fetchDateProgress + (state.fetchTilesProgress / state.dates.length)) * 100
+
     return (
       <div style={{
         width: 800,
@@ -455,27 +490,44 @@ class App extends React.Component {
               <button onClick={() => {this.stopPlaying()}}>pauze</button>
             }
           </div>
-          <div className="column"></div>
-        </div>
-        {state.parsing && progress ? 
-          <div style={{
-            position: 'absolute',
-            bottom: 500,
-            left: 4,
-            width: 800,
-            height: 8
-          }}
-          >
+          <div className="column">
+          {state.fetching && fetchingProgress ? 
             <div style={{
-              width: progress + '%',
-              backgroundColor: 'red',
+              width: '100%',
               height: 8,
-              float: 'left',
-            }}></div>
+              marginBottom: 4
+            }}
+            >
+              <div style={{
+                width: fetchingProgress + '%',
+                backgroundColor: 'red',
+                height: 8,
+                float: 'left',
+              }}></div>
+            </div>
+          : 
+            null
+          }
+          {state.parsing && parsingProgress ? 
+            <div style={{
+              width: '100%',
+              height: 8,
+              marginBottom: 4
+            }}
+            >
+              <div style={{
+                width: parsingProgress + '%',
+                backgroundColor: 'red',
+                height: 8,
+                float: 'left',
+              }}></div>
+            </div>
+          : 
+            null
+          }
           </div>
-        : 
-          null
-        }
+        </div>
+        
         <div id='map' style={{
           width: 792,
           height: 500,
