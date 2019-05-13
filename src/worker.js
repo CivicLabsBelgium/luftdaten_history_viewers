@@ -1,6 +1,5 @@
 export default () => {
-
-    self.addEventListener('message', e => { // eslint-disable-line no-restricted-globals
+    const parseSensors = e => {
         if (!e || !e.data.sensors || !e.data.amountOfLayers) return
 
         const {amountOfLayers, interval, start} = e.data
@@ -58,5 +57,6 @@ export default () => {
         }
 
         postMessage({geoJsonObject});
-    })
+    }
+    self.addEventListener('message', parseSensors) // eslint-disable-line no-restricted-globals
 }

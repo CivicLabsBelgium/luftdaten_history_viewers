@@ -229,8 +229,9 @@ class App extends React.Component {
           source: new XYZ({
             //url: 'https://maps.luftdaten.info/tiles/{z}/{x}/{y}.png',
             //url: 'https://api.tiles.mapbox.com/v4/mapbox.streets/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXBwc2Fsb29uIiwiYSI6ImNpaGMwN2p2ZTEweHN2MGtpMm5lNnkxcmQifQ.vNd3He7Merax-vnWQS_ZTQ'
-            url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'
+            //url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'
             //url: 'https://tiles.wmflabs.org/bw-mapnik/{z}/{x}/{y}.png'
+            url: 'https://api.mapbox.com/styles/v1/appsaloon/cj3tqlivy00002sq88o3vzsgr/tiles/256/{z}/{x}/{y}?access_token=pk.eyJ1IjoiYXBwc2Fsb29uIiwiYSI6ImNpaGMwN2p2ZTEweHN2MGtpMm5lNnkxcmQifQ.vNd3He7Merax-vnWQS_ZTQ'
           })
         })
       ]
@@ -483,48 +484,51 @@ class App extends React.Component {
                 <option value='PM10'>PM10</option>
               </select>
             </label>
+            <label>Interval (min):<input type="number" min="10" max="120" step="10" defaultValue={state.interval / (1000 * 60)} onChange={(e) => this.setState({interval: e.target.value * 1000 * 60})}/></label>
             <button onClick={() => this.getData()}>Get data</button>
+          </div>
+          <div className="column">
+            <label>Frames per second :<input type="number" min="1" max="15" step="1" defaultValue={state.framesPerSecond} onChange={(e) => this.setState({framesPerSecond: e.target.value})}/></label>
+
+            {state.fetching && fetchingProgress ? 
+              <div style={{
+                width: '100%',
+                height: 8,
+                marginBottom: 4
+              }}
+              >
+                <div style={{
+                  width: fetchingProgress + '%',
+                  backgroundColor: 'red',
+                  height: 8,
+                  float: 'left',
+                }}></div>
+              </div>
+            : 
+              null
+            }
+            {state.parsing && parsingProgress ? 
+              <div style={{
+                width: '100%',
+                height: 8,
+                marginBottom: 4
+              }}
+              >
+                <div style={{
+                  width: parsingProgress + '%',
+                  backgroundColor: 'red',
+                  height: 8,
+                  float: 'left',
+                }}></div>
+              </div>
+            : 
+              null
+            }
             {state.stopPlayer ?
               <button onClick={() => {this.startPlaying()}}>play</button>
             :
               <button onClick={() => {this.stopPlaying()}}>pauze</button>
             }
-          </div>
-          <div className="column">
-          {state.fetching && fetchingProgress ? 
-            <div style={{
-              width: '100%',
-              height: 8,
-              marginBottom: 4
-            }}
-            >
-              <div style={{
-                width: fetchingProgress + '%',
-                backgroundColor: 'red',
-                height: 8,
-                float: 'left',
-              }}></div>
-            </div>
-          : 
-            null
-          }
-          {state.parsing && parsingProgress ? 
-            <div style={{
-              width: '100%',
-              height: 8,
-              marginBottom: 4
-            }}
-            >
-              <div style={{
-                width: parsingProgress + '%',
-                backgroundColor: 'red',
-                height: 8,
-                float: 'left',
-              }}></div>
-            </div>
-          : 
-            null
-          }
           </div>
         </div>
         

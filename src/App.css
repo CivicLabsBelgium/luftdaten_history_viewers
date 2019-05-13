@@ -34,8 +34,15 @@ label {
   display: block;
   position: relative;
 }
-label > div, label > select {
+label > div, label > select, label > input {
   float: right;
+}
+
+label > input{
+  width: 146px;
+}
+label > select{
+  width: 168px;
 }
 
 input, select{
@@ -49,6 +56,10 @@ input, select{
 
 select{
   height: 29px;
+}
+
+button {
+  outline: none;
 }
 
 
