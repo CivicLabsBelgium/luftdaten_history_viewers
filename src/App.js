@@ -17,6 +17,7 @@ import GeoJSON from 'ol/format/GeoJSON'
 
 import "react-datepicker/dist/react-datepicker.css"
 import "./App.css"
+import { isSunday } from 'date-fns/esm';
 
 
 let map
@@ -227,6 +228,11 @@ class App extends React.Component {
       layers: [
         new TileLayer({
           source: new XYZ({
+            url: 'https://api.mapbox.com/styles/v1/appsaloon/cjvmj8i920d8z1elctn0ofdv7/tiles/256/{z}/{x}/{y}?access_token=pk.eyJ1IjoiYXBwc2Fsb29uIiwiYSI6ImNpaGMwN2p2ZTEweHN2MGtpMm5lNnkxcmQifQ.vNd3He7Merax-vnWQS_ZTQ'
+          })
+        }),
+        new TileLayer({
+          source: new XYZ({
             //url: 'https://maps.luftdaten.info/tiles/{z}/{x}/{y}.png',
             //url: 'https://api.tiles.mapbox.com/v4/mapbox.streets/{z}/{x}/{y}.png?access_token=pk.eyJ1IjoiYXBwc2Fsb29uIiwiYSI6ImNpaGMwN2p2ZTEweHN2MGtpMm5lNnkxcmQifQ.vNd3He7Merax-vnWQS_ZTQ'
             //url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'
@@ -372,8 +378,8 @@ class App extends React.Component {
     const mapLayers = map.getLayers().getArray()
     const timeZoneOffset = state.position[1] * 24 / 360
     const sun = SunCalc.getPosition(addHours(state.time, timeZoneOffset), state.position[0], state.position[1]).altitude
-    const tileOpacity = Math.min(Math.max(0.8 + ((sun + 0.2)), 0),1)
-    mapLayers[0].setOpacity(tileOpacity)
+    const tileOpacity = Math.min(Math.max(0.3 + ((sun * 2) - sun), 0),1)
+    mapLayers[1].setOpacity(tileOpacity)
     
     mapLayers.forEach(layer => {
       if (layer.get('name') === 'timeSerie') {
