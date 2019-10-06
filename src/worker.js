@@ -40,8 +40,8 @@ export default () => {
                 tillTime = time + interval
                 const data = []
                 while(timeSerie[0] && timeSerie[0][0] < tillTime) {
-                if (timeSerie[0][0] > time) data.push(timeSerie.shift())
-                timeSerie.shift()
+                    if (timeSerie[0][0] > time) data.push(timeSerie.shift())
+                    timeSerie.shift()
                 }
                 const value = (data.reduce((acc, t) => {
                 acc = acc + t[1]
